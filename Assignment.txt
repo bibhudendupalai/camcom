@@ -1,0 +1,162 @@
+Understanding the Requirements:
+  Portal Functionality: 
+    Track logged-in QC persons.
+    Identify which logged-in persons are currently free (not on a task).
+    Assign tasks automatically to free QC persons.
+    Track task completion and reassign new tasks if any are pending.
+
+Architectural Considerations:
+    Database Schema: We need tables to store information about  persons, their login status, tasks assigned, and task statuses.
+    API Endpoints: We need endpoints to handle user authentication, tracking logged-in users, task assignment, and task completion.
+    Business Logic: Implement logic for identifying free QC persons, assigning tasks, and tracking task status changes.
+
+
+
+Database Schema:
+    User: Fields: id, username, password, is_logged_in.
+    Task: Fields: id, user (foreign key to QCUser), status (e.g., pending, completed),created and taskName.
+API Endpoints:
+    /login: POST endpoint for user login.
+    /logout: POST endpoint for user logout.
+    /dashbord: GET endpoint to retrieve  QC persons and their task with status.
+    /taskcomplete/<int:id>/: POST endpoint to mark a task as completed.
+Business Logic:
+    When a user logs in, update their is_logged_in status.
+    query the database for users with is_logged_in=True and no assigned tasks.
+    Assign tasks by creating a new QCTask instance and linking it to a free user.
+    When a task is completed, update its status and check if any pending tasks are available for assignment.
+
+
+Final Step:
+    Document your API endpoints and usage.
+    Test each endpoint using tools like Postman or Django's test client.
+    Ensure proper error handling and security measures, like input validation and user authentication.
+    Refactor and optimize code as needed.
+
+
+# models.py
+
+from django.db import models
+class User(models.Model):
+    username = models.CharField(max_length=100)
+    password = models.CharField(max_length=100)
+    is_logged_in = models.BooleanField(default=False)
+
+class Task(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    created=models.DateTimeField(auto_now_add=True)
+    taskName=models.CharField(max_length=20)
+    status = models.CharField(max_length=20,default=None)  # e.g., pending, completed
+
+#views.py
+
+   
+class Login(APIView):
+    permission_classes=[AllowAny]
+    def post(self,request):
+
+        if "username" not in request.data:
+            Err="username not Given"
+            return Response({"msg":Err},status=status.HTTP_401_UNAUTHORIZED)
+
+        if "password" not in request.data:
+            return Response({"msg":"Password not given"},status=status.HTTP_401_UNAUTHORIZED)       
+
+
+        username=request.data["username"]
+        password=request.data['password'].replace(" ","")
+
+        if not  User.objects.filter(username=username).exists():
+            return Response({"msg":"User Not exist Try to Signup"},status=status.HTTP_401_UNAUTHORIZED)
+        
+    
+        try:
+            if authenticate(username=username, password=password):
+                user = User.objects.get(email=username)
+                user.is_logged_in=True
+                user.save()
+                token, _ = Token.objects.get_or_create(user=user)
+                return Response({'token': token.key}), status=status.HTTP_200_OK)
+        except:
+            return Response({"msg":'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+    
+class Logout(APIView):
+    permission_classes=[IsAuthenticated]
+
+    def post(self,request):
+        try:
+            # Delete the user's token to logout
+            user = User.objects.get(email=request.user.username)
+            user.is_logged_in=False
+            user.save()
+            request.user.auth_token.delete()
+            return Response({'message': 'Successfully logged out.'}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"msg": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class DashBoard(APIView):
+    permission_classes=[IsAuthenticated]
+
+    def get(request):
+        task=Task.objects.filter(user=request)
+        if task.count()>0:
+            latest=task.latest()
+            if latest["status"]=="completed":
+                if Task.objects.filter(status=None).exists():
+                  oldTask=Task.objects.filter(status=None).first()
+                  oldTask.user=request.user
+                  oldTask.status="pending"
+                  oldTask.save()
+
+        else:
+            if Task.objects.filter(status=None).exists():
+                oldTask=Task.objects.filter(status=None).first()
+                oldTask.user=request.user
+                oldTask.status="pending"
+                oldTask.save()
+        return Response({
+            "data":Task.objects.filter(user=request).values()
+        })
+    
+class taskComplete(APIView):
+    permission_classes=[IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        taskId = kwargs.get('id')
+        task=Task.objects.get(pk=taskId)
+        task.status="completed"
+        task.save()
+
+        if Task.objects.filter(status=None).exists():
+            oldTask=Task.objects.filter(status=None).first()
+            oldTask.user=request.user
+            oldTask.status="pending"
+            oldTask.save()
+        return Response({"msg":"assined work"})
+
+
+
+# urls.py
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path('dashbord/', DashBoard.as_view(), name='dashbord'),
+    path('taskcomplete/<int:id>/', taskComplete.as_view(), name='taskcomplete'),
+    path('login/',Login.as_view(),name='login'),
+    path('logout/',Logout.as_view(),name='logout'),
+    # Define other URL patterns
+]
+
+# settings.py
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'QCDB',
+        'USER': 'QC_USER',
+        'PASSWORD': 'QC_PASSWORD',
+        'HOST': 'localhost',
+        'PORT': '3306',
+    }
+}
+
